@@ -1,0 +1,6 @@
+{
+  "name": "SkillSwap",
+  "description": "Peer-to-peer skill exchange platform where users teach skills to earn points and spend points to learn from mentors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
