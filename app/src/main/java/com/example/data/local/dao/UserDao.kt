@@ -29,4 +29,7 @@ interface UserDao {
 
     @Query("UPDATE users SET skillPoints = :points WHERE userId = :userId")
     suspend fun updateUserPoints(userId: String, points: Int)
+
+    @Query("UPDATE users SET isActive = :isActive WHERE userId = :userId")
+    suspend fun updateUserActiveStatus(userId: String, isActive: Boolean)
 }

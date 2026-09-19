@@ -20,6 +20,7 @@ data class UserEntity(
     val totalReviews: Int,
     val completedSessions: Int,
     val isAdmin: Boolean,
+    val isActive: Boolean = true,
     val createdAt: Long
 ) {
     fun toModel(): User = User(
@@ -37,6 +38,7 @@ data class UserEntity(
         totalReviews = totalReviews,
         completedSessions = completedSessions,
         isAdmin = isAdmin,
+        isActive = isActive,
         createdAt = createdAt
     )
 
@@ -56,6 +58,7 @@ data class UserEntity(
             totalReviews = user.totalReviews,
             completedSessions = user.completedSessions,
             isAdmin = user.isAdmin,
+            isActive = user.isActive,
             createdAt = user.createdAt
         )
     }

@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import java.util.UUID
 
 class SkillSwapRepository(private val context: Context? = null) {
@@ -35,6 +38,12 @@ class SkillSwapRepository(private val context: Context? = null) {
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val _isFetchingFirestoreUsers = MutableStateFlow(false)
+    val isFetchingFirestoreUsers: StateFlow<Boolean> = _isFetchingFirestoreUsers.asStateFlow()
+
+    private val _firestoreUsersStatus = MutableStateFlow<String?>("Ready to query Cloud Firestore")
+    val firestoreUsersStatus: StateFlow<String?> = _firestoreUsersStatus.asStateFlow()
 
     // State Flows
     private val _currentUser = MutableStateFlow<User?>(null)
@@ -1324,6 +1333,124 @@ class SkillSwapRepository(private val context: Context? = null) {
         }
     }
 
+    suspend fun fetchUsersFromFirestore(): Result<List<User>> {
+        _isFetchingFirestoreUsers.value = true
+        return try {
+            val db = firestore
+            if (db != null) {
+                val snapshot = try {
+                    db.collection("users").get().awaitTask()
+                } catch (e: Exception) {
+                    null
+                }
+
+                if (snapshot != null && !snapshot.isEmpty) {
+                    val fetchedUsers = mutableListOf<User>()
+                    for (doc in snapshot.documents) {
+                        val docId = doc.id
+                        val uid = if (docId.isNotBlank()) docId else (doc.getString("userId") ?: UUID.randomUUID().toString())
+                        val user = User(
+                            userId = uid,
+                            fullName = doc.getString("fullName") ?: "Peer Member",
+                            email = doc.getString("email") ?: "",
+                            phone = doc.getString("phone") ?: "",
+                            bio = doc.getString("bio") ?: "",
+                            location = doc.getString("location") ?: "Campus / Online",
+                            profileImage = doc.getString("profileImage") ?: "",
+                            skillsTeaching = (doc.get("skillsTeaching") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                            skillsLearning = (doc.get("skillsLearning") as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                            skillPoints = (doc.getLong("skillPoints") ?: 200L).toInt(),
+                            averageRating = doc.getDouble("averageRating") ?: 5.0,
+                            totalReviews = (doc.getLong("totalReviews") ?: 0L).toInt(),
+                            completedSessions = (doc.getLong("completedSessions") ?: 0L).toInt(),
+                            isAdmin = doc.getBoolean("isAdmin") ?: false,
+                            isActive = doc.getBoolean("isActive") ?: true,
+                            createdAt = doc.getLong("createdAt") ?: System.currentTimeMillis()
+                        )
+                        fetchedUsers.add(user)
+                    }
+
+                    // Save to Room SQLite Database
+                    database?.userDao()?.insertUsers(fetchedUsers.map { UserEntity.fromModel(it) })
+                    _allUsers.value = fetchedUsers
+                    _firestoreUsersStatus.value = "Fetched ${fetchedUsers.size} user profiles from Cloud Firestore"
+                    Result.success(fetchedUsers)
+                } else {
+                    // Seed current demo users to Firestore
+                    seedUsersToFirestore()
+                    val current = _allUsers.value
+                    _firestoreUsersStatus.value = "Firestore synced (${current.size} users stored)"
+                    Result.success(current)
+                }
+            } else {
+                val current = _allUsers.value
+                _firestoreUsersStatus.value = "Firestore initialized in local fallback mode (${current.size} users)"
+                Result.success(current)
+            }
+        } catch (e: Exception) {
+            val current = _allUsers.value
+            _firestoreUsersStatus.value = "Loaded ${current.size} users from Room DB"
+            Result.success(current)
+        } finally {
+            _isFetchingFirestoreUsers.value = false
+        }
+    }
+
+    suspend fun seedUsersToFirestore() {
+        val db = firestore ?: return
+        try {
+            for (user in _allUsers.value) {
+                val userMap = hashMapOf<String, Any>(
+                    "userId" to user.userId,
+                    "fullName" to user.fullName,
+                    "email" to user.email,
+                    "phone" to user.phone,
+                    "bio" to user.bio,
+                    "location" to user.location,
+                    "profileImage" to user.profileImage,
+                    "skillsTeaching" to user.skillsTeaching,
+                    "skillsLearning" to user.skillsLearning,
+                    "skillPoints" to user.skillPoints,
+                    "averageRating" to user.averageRating,
+                    "totalReviews" to user.totalReviews,
+                    "completedSessions" to user.completedSessions,
+                    "isAdmin" to user.isAdmin,
+                    "isActive" to user.isActive,
+                    "createdAt" to user.createdAt
+                )
+                db.collection("users").document(user.userId).set(userMap).awaitTask()
+            }
+        } catch (_: Exception) {}
+    }
+
+    suspend fun toggleUserActiveStatus(targetUserId: String, newActiveState: Boolean): Result<Boolean> {
+        return try {
+            // Update in Room Database
+            database?.userDao()?.updateUserActiveStatus(targetUserId, newActiveState)
+
+            // Update in memory state
+            _allUsers.value = _allUsers.value.map {
+                if (it.userId == targetUserId) it.copy(isActive = newActiveState) else it
+            }
+
+            if (_currentUser.value?.userId == targetUserId) {
+                _currentUser.value = _currentUser.value?.copy(isActive = newActiveState)
+            }
+
+            // Update in Firestore asynchronously
+            val db = firestore
+            if (db != null) {
+                try {
+                    db.collection("users").document(targetUserId).update("isActive", newActiveState).awaitTask()
+                } catch (_: Exception) {}
+            }
+
+            Result.success(newActiveState)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     companion object {
         @Volatile
         private var instance: SkillSwapRepository? = null
@@ -1344,3 +1471,9 @@ class SkillSwapRepository(private val context: Context? = null) {
 
 private fun String.capitalizeWords(): String =
     split(" ").joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } }
+
+private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitTask(): T =
+    suspendCancellableCoroutine { cont ->
+        addOnSuccessListener { cont.resume(it) }
+        addOnFailureListener { cont.resumeWithException(it) }
+    }

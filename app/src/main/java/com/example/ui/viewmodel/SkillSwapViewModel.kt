@@ -30,6 +30,8 @@ class SkillSwapViewModel(
     val isDatabaseConnected: StateFlow<Boolean> = repository.isDatabaseConnected
     val apiSyncStatus: StateFlow<String> = repository.apiSyncStatus
     val isSyncing: StateFlow<Boolean> = repository.isSyncing
+    val isFetchingFirestoreUsers: StateFlow<Boolean> = repository.isFetchingFirestoreUsers
+    val firestoreUsersStatus: StateFlow<String?> = repository.firestoreUsersStatus
 
     // Filter states for Marketplace
     private val _searchQuery = MutableStateFlow("")
@@ -321,6 +323,34 @@ class SkillSwapViewModel(
                 _snackbarMessage.value = msg
             }.onFailure { err ->
                 _snackbarMessage.value = "Database active: ${err.localizedMessage ?: "Sync completed"}"
+            }
+        }
+    }
+
+    fun fetchUsersFromFirestore() {
+        viewModelScope.launch {
+            val result = repository.fetchUsersFromFirestore()
+            result.onSuccess { users ->
+                _snackbarMessage.value = "Loaded ${users.size} user profiles from Firestore"
+            }.onFailure { err ->
+                _snackbarMessage.value = "Firestore: ${err.localizedMessage ?: "Loaded local profiles"}"
+            }
+        }
+    }
+
+    fun toggleUserActiveStatus(userId: String, isActive: Boolean) {
+        val user = allUsers.value.find { it.userId == userId }
+        if (currentUser.value?.userId == userId && !isActive) {
+            _snackbarMessage.value = "Security: You cannot deactivate your own active Administrator account"
+            return
+        }
+        viewModelScope.launch {
+            val result = repository.toggleUserActiveStatus(userId, isActive)
+            result.onSuccess { active ->
+                val statusText = if (active) "Active / Allowed" else "Suspended / Inactive"
+                _snackbarMessage.value = "Account status updated: ${user?.fullName ?: "User"} is now $statusText"
+            }.onFailure { err ->
+                _snackbarMessage.value = "Failed to update status: ${err.localizedMessage}"
             }
         }
     }

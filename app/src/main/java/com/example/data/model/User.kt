@@ -15,5 +15,6 @@ data class User(
     val totalReviews: Int = 0,
     val completedSessions: Int = 0,
     val isAdmin: Boolean = false,
+    val isActive: Boolean = true,
     val createdAt: Long = System.currentTimeMillis()
 )
